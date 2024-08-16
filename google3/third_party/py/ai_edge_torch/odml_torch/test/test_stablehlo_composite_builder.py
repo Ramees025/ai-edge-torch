@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Tests for StableHLOCompositeBuilder."""
-
 import math
 
-from ai_edge_torch import lowertools
-from ai_edge_torch.hlfb import StableHLOCompositeBuilder
+from ai_edge_torch import odml_torch
+from ai_edge_torch.odml_torch import composite
 import torch
 import torch.nn.functional as F
 
@@ -26,7 +24,8 @@ from absl.testing import absltest as googletest
 
 def _export_stablehlo_mlir(model, args):
   ep = torch.export.export(model, args)
-  return lowertools.exported_program_to_mlir_text(ep)
+  mlir = odml_torch.export.exported_program_to_mlir(ep)
+  return mlir.get_text()
 
 
 class TestStableHLOCompositeBuilder(googletest.TestCase):
@@ -35,7 +34,7 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
     class SampleModel(torch.nn.Module):
 
       def forward(self, x):
-        builder = StableHLOCompositeBuilder(name="test.plus_two")
+        builder = composite.StableHLOCompositeBuilder(name="test.plus_two")
         y = x + 1
         y = builder.mark_inputs(y)
         z = y + 2
@@ -43,20 +42,21 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
         return z
 
     mlir = _export_stablehlo_mlir(SampleModel().eval(), (torch.rand((2, 2)),))
+    self.assertEqual(mlir.count("stablehlo.custom_call @mark_tensor"), 0)
     self.assertEqual(mlir.count('stablehlo.composite "test.plus_two"'), 1)
 
   def test_build_multiple_composites(self):
     class SampleModel(torch.nn.Module):
 
       def plus_one(self, x: torch.Tensor):
-        builder = StableHLOCompositeBuilder("test.plus_one")
+        builder = composite.StableHLOCompositeBuilder("test.plus_one")
         x = builder.mark_inputs(x)
         y = x + 1
         y = builder.mark_outputs(y)
         return y
 
       def plus_two(self, x: torch.Tensor):
-        builder = StableHLOCompositeBuilder("test.plus_two")
+        builder = composite.StableHLOCompositeBuilder("test.plus_two")
         x = builder.mark_inputs(x)
         y = x + 2
         y = builder.mark_outputs(y)
@@ -71,6 +71,7 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
         return x
 
     mlir = _export_stablehlo_mlir(SampleModel().eval(), (torch.rand((2, 2)),))
+    self.assertEqual(mlir.count("stablehlo.custom_call @mark_tensor"), 0)
     self.assertEqual(mlir.count('stablehlo.composite "test.plus_one"'), 1)
     self.assertEqual(mlir.count('stablehlo.composite "test.plus_two"'), 2)
 
@@ -81,7 +82,7 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
         super().__init__()
 
       def log_softmax(self, x: torch.Tensor, dim: int):
-        builder = StableHLOCompositeBuilder(
+        builder = composite.StableHLOCompositeBuilder(
             name="test.log_softmax", attr={"dim": dim}
         )
         x = builder.mark_inputs(x)
@@ -96,6 +97,7 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
         return x
 
     mlir = _export_stablehlo_mlir(SampleModel().eval(), (torch.rand((2, 2)),))
+    self.assertEqual(mlir.count("stablehlo.custom_call @mark_tensor"), 0)
     self.assertEqual(mlir.count('stablehlo.composite "test.log_softmax"'), 2)
     self.assertEqual(mlir.count("composite_attributes = {dim = 0 : i64}"), 1)
     self.assertEqual(mlir.count("composite_attributes = {dim = 1 : i64}"), 1)
@@ -107,7 +109,7 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
         super().__init__()
 
       def log_softmax(self, x: torch.Tensor, dim: int):
-        builder = StableHLOCompositeBuilder(
+        builder = composite.StableHLOCompositeBuilder(
             name="test.log_softmax",
             attr={
                 "dim": dim,
@@ -126,6 +128,7 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
         return x
 
     mlir = _export_stablehlo_mlir(SampleModel().eval(), (torch.rand((2, 2)),))
+    self.assertEqual(mlir.count("stablehlo.custom_call @mark_tensor"), 0)
     self.assertEqual(mlir.count('stablehlo.composite "test.log_softmax"'), 1)
     self.assertEqual(
         mlir.count(
@@ -146,7 +149,9 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
           head_size: int,
           mask: torch.Tensor,
       ):
-        builder = StableHLOCompositeBuilder("test.scaled_dot_product_attention")
+        builder = composite.StableHLOCompositeBuilder(
+            "test.scaled_dot_product_attention"
+        )
         q, k, v, mask = builder.mark_inputs(q, k, v, mask)
 
         scale = 1.0 / math.sqrt(head_size)
@@ -186,6 +191,7 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
         SDPAModel().eval(),
         (query, key, value, mask),
     )
+    self.assertEqual(mlir.count("stablehlo.custom_call @mark_tensor"), 0)
     self.assertEqual(
         mlir.count('stablehlo.composite "test.scaled_dot_product_attention"'), 1
     )
@@ -201,7 +207,7 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
           head_size: int,
           include_captanh: bool,
       ):
-        builder = StableHLOCompositeBuilder(
+        builder = composite.StableHLOCompositeBuilder(
             name="test.scaled_dot_product_attention",
             attr={"include_captanh": include_captanh},
         )
@@ -251,7 +257,7 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
     class SampleModel(torch.nn.Module):
 
       def mimo_sample(self, a, b, c):
-        builder = StableHLOCompositeBuilder(name="test.mimo_sample")
+        builder = composite.StableHLOCompositeBuilder(name="test.mimo_sample")
 
         a, b, c = builder.mark_inputs(a, b, c)
         x = a + b + c
@@ -271,6 +277,7 @@ class TestStableHLOCompositeBuilder(googletest.TestCase):
     mlir = _export_stablehlo_mlir(
         SampleModel().eval(), (torch.rand(2), torch.rand(2), torch.rand(2))
     )
+    self.assertEqual(mlir.count("stablehlo.custom_call @mark_tensor"), 0)
     self.assertEqual(mlir.count('stablehlo.composite "test.mimo_sample"'), 3)
 
 
